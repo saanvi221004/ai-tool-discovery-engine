@@ -49,51 +49,99 @@ class UserResponse(db.Model):
 class RecommendationEngine:
     @staticmethod
     def calculate_score(tool, user_response):
-        score = 0
+        """
+        Calculate recommendation score with transparent, deterministic logic.
         
-        # Role matching (30% weight)
-        user_roles = [user_response['role'].lower()]
-        tool_roles = [role.lower() for role in json.loads(tool.target_roles)]
-        role_match = any(role in user_roles for role in tool_roles)
-        if role_match:
-            score += 30
+        SCORING WEIGHTS:
+        - Workflow Match: 40% (primary factor - most important for daily use)
+        - Challenge Match: 40% (addresses specific pain points)
+        - Skill Level Compatibility: 20% (ensures tool is appropriate)
         
-        # Skill level matching (20% weight)
-        if tool.skill_level == user_response['skill_level'] or tool.skill_level == 'all':
-            score += 20
-        elif tool.skill_level == 'beginner' and user_response['skill_level'] == 'intermediate':
-            score += 10
-        elif tool.skill_level == 'intermediate' and user_response['skill_level'] == 'advanced':
-            score += 10
+        RETURNS: Detailed scoring breakdown for transparency
+        """
+        scoring_breakdown = {
+            'workflow_match': {'points': 0, 'max': 40, 'achieved': False},
+            'challenge_match': {'points': 0, 'max': 40, 'matched_challenges': 0, 'total_challenges': 0},
+            'skill_compatibility': {'points': 0, 'max': 20, 'compatible': False},
+            'total_score': 0
+        }
         
-        # Pain point matching (30% weight)
-        user_pain_points = [point.lower() for point in user_response['pain_points']]
-        tool_pain_points = [point.lower() for point in json.loads(tool.pain_points)]
-        pain_point_matches = len(set(user_pain_points) & set(tool_pain_points))
-        if user_pain_points:
-            score += (pain_point_matches / len(user_pain_points)) * 30
-        
-        # Workflow matching (20% weight)
+        # WORKFLOW MATCH (40% weight) - Most important factor
         user_workflow = user_response['workflow'].lower()
         tool_use_cases = [use_case.lower() for use_case in json.loads(tool.use_cases)]
-        workflow_match = any(user_workflow in use_case or use_case in user_workflow for use_case in tool_use_cases)
-        if workflow_match:
-            score += 20
         
-        return min(score, 100)  # Cap at 100
+        # Exact workflow match gets full points
+        if any(user_workflow == use_case for use_case in tool_use_cases):
+            scoring_breakdown['workflow_match']['points'] = 40
+            scoring_breakdown['workflow_match']['achieved'] = True
+        # Partial/related match gets partial points
+        elif any(user_workflow in use_case or use_case in user_workflow for use_case in tool_use_cases):
+            scoring_breakdown['workflow_match']['points'] = 25  # Partial match
+            scoring_breakdown['workflow_match']['achieved'] = True
+        
+        # CHALLENGE MATCH (40% weight) - Addresses pain points
+        user_pain_points = [point.lower() for point in user_response['pain_points']]
+        tool_pain_points = [point.lower() for point in json.loads(tool.pain_points)]
+        matched_challenges = set(user_pain_points) & set(tool_pain_points)
+        
+        scoring_breakdown['challenge_match']['matched_challenges'] = len(matched_challenges)
+        scoring_breakdown['challenge_match']['total_challenges'] = len(user_pain_points)
+        
+        if user_pain_points:
+            # Proportional scoring based on challenge match percentage
+            challenge_percentage = len(matched_challenges) / len(user_pain_points)
+            scoring_breakdown['challenge_match']['points'] = round(challenge_percentage * 40)
+        
+        # SKILL LEVEL COMPATIBILITY (20% weight) - Ensures appropriateness
+        user_skill = user_response['skill_level']
+        tool_skill = tool.skill_level
+        
+        # Exact match gets full points
+        if tool_skill == user_skill or tool_skill == 'all':
+            scoring_breakdown['skill_compatibility']['points'] = 20
+            scoring_breakdown['skill_compatibility']['compatible'] = True
+        # One level difference gets partial points (tool easier than user)
+        elif (tool_skill == 'beginner' and user_skill == 'intermediate') or \
+             (tool_skill == 'intermediate' and user_skill == 'advanced'):
+            scoring_breakdown['skill_compatibility']['points'] = 15
+            scoring_breakdown['skill_compatibility']['compatible'] = True
+        # Tool harder than user gets minimal points (challenging but possible)
+        elif (tool_skill == 'intermediate' and user_skill == 'beginner') or \
+             (tool_skill == 'advanced' and user_skill == 'intermediate'):
+            scoring_breakdown['skill_compatibility']['points'] = 10
+            scoring_breakdown['skill_compatibility']['compatible'] = False
+        
+        # Calculate total score
+        scoring_breakdown['total_score'] = (
+            scoring_breakdown['workflow_match']['points'] +
+            scoring_breakdown['challenge_match']['points'] +
+            scoring_breakdown['skill_compatibility']['points']
+        )
+        
+        return scoring_breakdown
     
     @staticmethod
     def get_recommendations(user_response, limit=10):
+        """
+        Get recommendations using the improved scoring algorithm.
+        
+        Only includes tools with meaningful relevance (>20% score).
+        Returns tools sorted by total score (highest first).
+        """
         tools = AITool.query.all()
         recommendations = []
         
         for tool in tools:
-            score = RecommendationEngine.calculate_score(tool, user_response)
-            if score > 20:  # Only include tools with meaningful relevance
+            scoring_breakdown = RecommendationEngine.calculate_score(tool, user_response)
+            total_score = scoring_breakdown['total_score']
+            
+            # Only include tools with meaningful relevance (>20% score)
+            if total_score > 20:
                 recommendations.append({
                     'tool': tool,
-                    'score': score,
-                    'explanation': RecommendationEngine.generate_explanation(tool, user_response, score)
+                    'score': total_score,
+                    'scoring_breakdown': scoring_breakdown,
+                    'explanation': RecommendationEngine.generate_transparent_explanation(tool, user_response, scoring_breakdown)
                 })
         
         # Sort by score and return top recommendations
@@ -101,33 +149,41 @@ class RecommendationEngine:
         return recommendations[:limit]
     
     @staticmethod
-    def generate_explanation(tool, user_response, score):
-        explanations = []
+    def generate_transparent_explanation(tool, user_response, scoring_breakdown):
+        """
+        Generate concrete, user-friendly explanation of why a tool was recommended.
         
-        # Role-based explanation
-        user_roles = [user_response['role'].lower()]
-        tool_roles = [role.lower() for role in json.loads(tool.target_roles)]
-        if any(role in user_roles for role in tool_roles):
-            explanations.append(f"Specifically designed for {user_response['role']}s")
+        Format: "This tool matches your [workflow] workflow,
+                 solves [X] of your [Y] selected challenges,
+                 and is suitable for [skill level] skill level."
+        """
+        workflow_score = scoring_breakdown['workflow_match']['points']
+        challenge_score = scoring_breakdown['challenge_match']
+        skill_score = scoring_breakdown['skill_compatibility']
         
-        # Skill level explanation
-        if tool.skill_level == user_response['skill_level']:
-            explanations.append(f"Matches your {user_response['skill_level']} skill level")
+        # Workflow description
+        workflow_desc = user_response['workflow'].lower()
+        if workflow_score > 0:
+            workflow_text = f"matches your {workflow_desc} workflow"
+        else:
+            workflow_text = f"doesn't match your {workflow_desc} workflow"
         
-        # Pain point explanation
-        user_pain_points = [point.lower() for point in user_response['pain_points']]
-        tool_pain_points = [point.lower() for point in json.loads(tool.pain_points)]
-        matched_pain_points = set(user_pain_points) & set(tool_pain_points)
-        if matched_pain_points:
-            explanations.append(f"Addresses your pain points: {', '.join(matched_pain_points)}")
+        # Challenge description
+        matched_challenges = challenge_score['matched_challenges']
+        total_challenges = challenge_score['total_challenges']
+        challenges_text = f"solves {matched_challenges} of your {total_challenges} selected challenges"
         
-        # Workflow explanation
-        user_workflow = user_response['workflow'].lower()
-        tool_use_cases = [use_case.lower() for use_case in json.loads(tool.use_cases)]
-        if any(user_workflow in use_case or use_case in user_workflow for use_case in tool_use_cases):
-            explanations.append(f"Fits your {user_response['workflow']} workflow")
+        # Skill level description
+        user_skill = user_response['skill_level']
+        if skill_score['points'] > 0:
+            if skill_score['compatible']:
+                skill_text = f"is suitable for {user_skill} skill level"
+            else:
+                skill_text = f"is challenging but possible for {user_skill} skill level"
+        else:
+            skill_text = f"is not suitable for {user_skill} skill level"
         
-        return "; ".join(explanations) if explanations else "Recommended based on your profile"
+        return f"This tool {workflow_text}, {challenges_text}, and {skill_text}."
 
 # Routes
 @app.route('/api/tools', methods=['GET'])
@@ -185,6 +241,7 @@ def get_recommendations():
         'features': json.loads(rec['tool'].features),
         'rating': rec['tool'].rating,
         'score': rec['score'],
+        'scoring_breakdown': rec['scoring_breakdown'],
         'explanation': rec['explanation']
     } for rec in recommendations])
 

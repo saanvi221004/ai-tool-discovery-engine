@@ -63,17 +63,32 @@ const Results = () => {
           <div className="user-summary">
             <p><strong>Role:</strong> {userInput.role}</p>
             <p><strong>Workflow:</strong> {userInput.workflow}</p>
-            <p><strong>Skill Level:</strong> {userInput.skill_level}</p>
+            <p><strong>Skill Level:</strong> {userInput.skill_level.charAt(0).toUpperCase() + userInput.skill_level.slice(1)}</p>
             <p><strong>Challenges:</strong> {userInput.pain_points?.join(', ')}</p>
           </div>
         </div>
 
         {recommendations.length === 0 ? (
           <div className="no-results">
-            <h2>No recommendations found</h2>
-            <p>We couldn't find tools that match your specific criteria. Try adjusting your responses.</p>
+            <div className="no-results-icon">🔍</div>
+            <h2>We couldn't find a perfect match</h2>
+            <p>But here are some popular AI tools you might find helpful for your journey.</p>
+            <div className="popular-tools">
+              <div className="popular-tool">
+                <h4>ChatGPT</h4>
+                <p>Versatile AI assistant for writing, coding, and problem-solving</p>
+              </div>
+              <div className="popular-tool">
+                <h4>Notion AI</h4>
+                <p>AI-powered workspace for organization and productivity</p>
+              </div>
+              <div className="popular-tool">
+                <h4>Canva Magic Design</h4>
+                <p>AI design tool for creating professional graphics easily</p>
+              </div>
+            </div>
             <button onClick={handleStartOver} className="btn btn-primary">
-              Start Over
+              Try Different Criteria
             </button>
           </div>
         ) : (
@@ -109,7 +124,7 @@ const Results = () => {
 
                     <div className="detail-section">
                       <h4>Skill Level:</h4>
-                      <span className="skill-badge">{tool.skill_level}</span>
+                      <span className="skill-badge">{tool.skill_level.charAt(0).toUpperCase() + tool.skill_level.slice(1)}</span>
                     </div>
 
                     <div className="detail-section">
@@ -128,7 +143,32 @@ const Results = () => {
                   </div>
 
                   <div className="explanation">
-                    <strong>Why we recommend this:</strong> {tool.explanation}
+                    <strong>Why this tool for you:</strong>
+                    <div className="explanation-details">
+                      {tool.explanation}
+                    </div>
+                  </div>
+
+                  <div className="match-breakdown">
+                    <h4>Match Breakdown</h4>
+                    <div className="breakdown-item">
+                      <span className="breakdown-label">Workflow match:</span>
+                      <span className={`breakdown-value ${tool.scoring_breakdown.workflow_match.points > 0 ? 'yes' : 'no'}`}>
+                        {tool.scoring_breakdown.workflow_match.points > 0 ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                    <div className="breakdown-item">
+                      <span className="breakdown-label">Challenges matched:</span>
+                      <span className="breakdown-value">
+                        {tool.scoring_breakdown.challenge_match.matched_challenges} / {tool.scoring_breakdown.challenge_match.total_challenges}
+                      </span>
+                    </div>
+                    <div className="breakdown-item">
+                      <span className="breakdown-label">Skill level compatibility:</span>
+                      <span className={`breakdown-value ${tool.scoring_breakdown.skill_compatibility.points > 0 ? 'yes' : 'no'}`}>
+                        {tool.scoring_breakdown.skill_compatibility.points > 0 ? 'Yes' : 'No'}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="tool-actions">
